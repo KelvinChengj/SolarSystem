@@ -115,7 +115,8 @@ function fmtDateTimeLocal(jdTT) {
 function updateClock() {
   const utc = ttToUTC(state.jd);
   const c = calendarFromJd(utc);
-  const y = c.year < 0 ? `前${-c.year + 1}` : String(c.year).padStart(4, '0');
+  // 天文年號：0 年 = 西元前 1 年
+  const y = c.year <= 0 ? `前${1 - c.year}` : String(c.year).padStart(4, '0');
   $('#clock-date').textContent = `${y}-${String(c.month).padStart(2, '0')}-${String(c.day).padStart(2, '0')}`;
   $('#clock-time').textContent = `${String(c.hour).padStart(2, '0')}:${String(c.minute).padStart(2, '0')}:${String(Math.floor(c.second)).padStart(2, '0')}`;
   $('#clock-jd').textContent = `JD ${state.jd.toFixed(5)} TT`;
@@ -161,7 +162,7 @@ function renderBodyList() {
   for (const id of ids) {
     const b = BODIES[id];
     const name = id === 'spacecraft' ? '太空船' : b.name;
-    const color = id === 'spacecraft' ? '#ff9d5c' : b.color;
+    const color = id === 'spacecraft' ? '#ff7ac6' : b.color;
     const btn = el('button', { type: 'button', class: id === state.focus ? 'is-focus' : '', dataset: { id }, onclick: () => scene.setFocus(id) },
       el('span', { class: 'dot', style: { '--dot': color } }),
       el('span', { class: 'name' }, name),
@@ -283,11 +284,15 @@ const tofInput = $('#m-tof');
 const tofRange = $('#m-tof-range');
 const parkInput = $('#m-park');
 const arrAltInput = $('#m-arrive-alt');
+const captureSel = $('#m-capture');
+const GIANTS = ['jupiter', 'saturn', 'uranus', 'neptune'];
 
 function setTarget(id, { keepDates = false } = {}) {
   state.target = id;
   targetSel.value = id;
   arrAltInput.value = BODIES[id].parkingAlt;
+  // 巨行星的低圓軌道捕獲 Δv 極大，實際任務（如朱諾號）採大橢圓軌道
+  captureSel.value = GIANTS.includes(id) ? '0.25' : '0';
   const r = defaultSearchRange(id, state.jd);
   tofRange.min = r.tofMin;
   tofRange.max = r.tofMax;
@@ -304,6 +309,7 @@ $$('.seg__btn[data-mode]').forEach((b) => b.addEventListener('click', () => {
     x.classList.toggle('is-on', x === b);
     x.setAttribute('aria-checked', String(x === b));
   });
+  captureSel.disabled = state.arrivalMode !== 'capture';
   replan();
 }));
 
@@ -316,6 +322,7 @@ function readPlanInputs() {
     parkingAlt: Math.max(150, +parkInput.value || 200),
     arrivalAlt: Math.max(10, +arrAltInput.value || BODIES[state.target].parkingAlt),
     arrivalMode: state.arrivalMode,
+    captureApo: +captureSel.value || 0,
   };
 }
 
@@ -339,7 +346,7 @@ targetSel.addEventListener('change', async () => {
   setTarget(targetSel.value);
   await searchBest();
 });
-for (const inp of [depInput, tofInput, parkInput, arrAltInput]) inp.addEventListener('change', replan);
+for (const inp of [depInput, tofInput, parkInput, arrAltInput, captureSel]) inp.addEventListener('change', replan);
 tofRange.addEventListener('input', () => { tofInput.value = tofRange.value; replan(); });
 
 function stat(label, value, unit, cls = '') {
@@ -372,7 +379,8 @@ function renderTransfer() {
     ['DLA / RLA', `${fmt.n1(t.dla)}° / ${fmt.n1(t.rla)}°`],
     ['逃逸點火 Δv', `${fmt.n3(t.dvDep)} km/s`, `LEO ${t.parkingAlt} km`],
     ['抵達 v∞', `${fmt.n3(t.vinfArr)} km/s`],
-    [t.arrivalMode === 'capture' ? '捕獲 Δv' : '捕獲 Δv（飛掠不需）', `${fmt.n3(t.dvArr)} km/s`, t.arrivalMode === 'capture' ? `${fmt.n0(t.arrivalAlt)} km 圓軌道` : ''],
+    [t.arrivalMode === 'capture' ? '捕獲 Δv' : '捕獲 Δv（飛掠不需）', `${fmt.n3(t.dvArr)} km/s`, t.arrivalMode !== 'capture' ? ''
+      : t.captureRa > t.captureRp * 1.01 ? `橢圓 ${fmtKm(t.arrivalAlt)} × ${fmtKm(t.captureRa - to.eqRadius)}` : `${fmt.n0(t.arrivalAlt)} km 圓軌道`],
     null,
     ['轉移軌道 近日點', `${fmt.n3(t.orbit.rp / AU_KM)} AU`],
     ['轉移軌道 遠日點', t.orbit.e < 1 ? `${fmt.n3(t.orbit.ra / AU_KM)} AU` : '∞'],
@@ -384,7 +392,7 @@ function renderTransfer() {
   ];
   fillKv(list, rows);
   // Hohmann 比較
-  const h = hohmann('earth', t.to, t.jdDep);
+  const h = hohmann('earth', t.to, t.jdDep, { captureApo: t.arrivalMode === 'capture' ? t.captureApo : 0 });
   const phaseNow = phaseAngle('earth', t.to, t.jdDep) * RAD;
   const nw = nextHohmannWindow('earth', t.to, state.jd);
   fillKv($('#hohmann-list'), [
@@ -587,7 +595,9 @@ function renderMission() {
   if (m.capture) {
     const c = m.capture;
     rows.push(null, ['抵達（近拱點）', fmtDateTime(jdOf(c.t))], ['近拱點高度', `${fmt.n1(c.altitude)} km`], ['抵達 v∞', `${fmt.n3(c.vinf)} km/s`],
-      ['捕獲 Δv', `${fmt.n3(c.dv)} km/s`], ['環繞軌道週期', fmtDuration(c.period, false)], ['軌道傾角', `${fmt.n1(c.inclination)}°`, `相對${to.name}赤道`]);
+      ['捕獲 Δv', `${fmt.n3(c.dv)} km/s`]);
+    if (c.eccentricity > 0.01) rows.push(['遠拱點高度', fmtKm(c.apoAltitude)], ['軌道離心率', fmt.n3(c.eccentricity)]);
+    rows.push(['環繞軌道週期', c.period > 2 * DAY_S ? fmtDays(c.period / DAY_S) : fmtDuration(c.period, false)], ['軌道傾角', `${fmt.n1(c.inclination)}°`, `相對${to.name}赤道`]);
   } else if (m.flyby) {
     const f = m.flyby;
     rows.push(null, ['最接近時刻', fmtDateTime(jdOf(f.t))], ['飛掠高度', `${fmt.n0(f.altitude)} km`], ['v∞', `${fmt.n3(f.vinf)} km/s`], ['偏轉角', `${fmt.n1(f.turnAngle)}°`]);

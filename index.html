@@ -113,6 +113,13 @@
               <input type="number" id="m-arrive-alt" min="50" max="5000000" step="50" />
             </label>
             <label class="field field--wide">
+              <span>捕獲軌道</span>
+              <select id="m-capture">
+                <option value="0">圓形低軌道（近拱點 = 遠拱點）</option>
+                <option value="0.25">大橢圓軌道（遠拱點 = ¼ 影響球，省 Δv）</option>
+              </select>
+            </label>
+            <label class="field field--wide">
               <span>發射場</span>
               <select id="m-site"></select>
             </label>

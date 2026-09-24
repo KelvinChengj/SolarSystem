@@ -26,13 +26,21 @@ export function departureDeltaV(vinf, mu, rp) {
   return Math.sqrt(vinf * vinf + (2 * mu) / rp) - Math.sqrt(mu / rp);
 }
 
-/** 抵達後於近拱點減速進入圓軌道所需 Δv (km/s)。 */
-export function captureDeltaV(vinf, mu, rp) {
-  return Math.sqrt(vinf * vinf + (2 * mu) / rp) - Math.sqrt(mu / rp);
+/**
+ * 抵達後於近拱點減速的捕獲 Δv (km/s)。ra = rp 為圓軌道；ra > rp 為橢圓捕獲軌道
+ * （近拱點速度 v_p = √(2μ·ra / (rp·(rp + ra)))，遠拱點越高越省 Δv）。
+ */
+export function captureDeltaV(vinf, mu, rp, ra = rp) {
+  return Math.sqrt(vinf * vinf + (2 * mu) / rp) - Math.sqrt((2 * mu * ra) / (rp * (rp + ra)));
+}
+
+/** 捕獲軌道遠拱點半徑：captureApo 為影響球半徑的比例（0 = 圓軌道）。 */
+export function captureApoapsis(toId, rp, captureApo = 0) {
+  return captureApo > 0 ? Math.max(rp, captureApo * sphereOfInfluence(toId)) : rp;
 }
 
 /** 理想 Hohmann 轉移（圓形共面軌道近似，使用平均半長軸）。 */
-export function hohmann(fromId, toId, jd = J2000_JD) {
+export function hohmann(fromId, toId, jd = J2000_JD, { captureApo = 0 } = {}) {
   const a1 = planetElements(fromId, jd).a;
   const a2 = planetElements(toId, jd).a;
   const mu = GM_SUN;
@@ -49,7 +57,7 @@ export function hohmann(fromId, toId, jd = J2000_JD) {
   const rpDep = from.eqRadius + (from.parkingAlt ?? 200);
   const rpArr = to.eqRadius + (to.parkingAlt ?? 400);
   const dvDep = departureDeltaV(vinfDep, from.gm, rpDep);
-  const dvArr = captureDeltaV(vinfArr, to.gm, rpArr);
+  const dvArr = captureDeltaV(vinfArr, to.gm, rpArr, captureApoapsis(toId, rpArr, captureApo));
   return {
     tofDays: tof / DAY_S,
     semiMajorAxis: at,
@@ -109,7 +117,7 @@ export function nextHohmannWindow(fromId, toId, jdStart) {
  */
 export function designTransfer({
   from = 'earth', to, jdDep, tofDays, parkingAlt = 200, arrivalAlt, arrivalMode = 'capture',
-  depState, arrState,
+  captureApo = 0, depState, arrState,
 }) {
   const jdArr = jdDep + tofDays;
   const s1 = depState ?? heliocentricState(from, jdDep);
@@ -125,7 +133,8 @@ export function designTransfer({
   const rpDep = fromB.eqRadius + parkingAlt;
   const rpArr = toB.eqRadius + alt;
   const dvDep = departureDeltaV(vinfDep, fromB.gm, rpDep);
-  const dvArr = arrivalMode === 'capture' ? captureDeltaV(vinfArr, toB.gm, rpArr) : 0;
+  const raArr = captureApoapsis(to, rpArr, captureApo);
+  const dvArr = arrivalMode === 'capture' ? captureDeltaV(vinfArr, toB.gm, rpArr, raArr) : 0;
   const eq = eclipticToEquatorial(vunit(vinfDepVec));
   const dla = Math.asin(Math.max(-1, Math.min(1, eq[2]))) * RAD;
   const rla = ((Math.atan2(eq[1], eq[0]) * RAD) + 360) % 360;
@@ -141,7 +150,8 @@ export function designTransfer({
     vinfDepVec, vinfArrVec, vinfDep, vinfArr,
     c3: vinfDep * vinfDep,
     dla, rla,
-    parkingAlt, arrivalAlt: alt, arrivalMode,
+    parkingAlt, arrivalAlt: alt, arrivalMode, captureApo,
+    captureRa: raArr, captureRp: rpArr,
     dvDep, dvArr, dvTotal: dvDep + dvArr,
     transferAngle,
     type: transferAngle < 180 ? 'I' : 'II',
@@ -159,12 +169,13 @@ export const yieldToUI = () => new Promise((r) => setTimeout(r, 0));
  */
 export async function computePorkchop({
   from = 'earth', to, jdStart, jdEnd, tofMin, tofMax, nx = 120, ny = 90,
-  parkingAlt = 200, arrivalAlt, arrivalMode = 'capture', onProgress, signal,
+  parkingAlt = 200, arrivalAlt, arrivalMode = 'capture', captureApo = 0, onProgress, signal,
 }) {
   const fromB = BODIES[from], toB = BODIES[to];
   const alt = arrivalAlt ?? toB.parkingAlt ?? 400;
   const rpDep = fromB.eqRadius + parkingAlt;
   const rpArr = toB.eqRadius + alt;
+  const raArr = captureApoapsis(to, rpArr, captureApo);
   const jdDep = Array.from({ length: nx }, (_, i) => jdStart + ((jdEnd - jdStart) * i) / (nx - 1));
   const tof = Array.from({ length: ny }, (_, j) => tofMin + ((tofMax - tofMin) * j) / (ny - 1));
   const depStates = jdDep.map((jd) => heliocentricState(from, jd));
@@ -189,7 +200,7 @@ export async function computePorkchop({
       c3[k] = vd * vd;
       vinfArr[k] = va;
       dvDep[k] = departureDeltaV(vd, fromB.gm, rpDep);
-      dvArr[k] = arrivalMode === 'capture' ? captureDeltaV(va, toB.gm, rpArr) : 0;
+      dvArr[k] = arrivalMode === 'capture' ? captureDeltaV(va, toB.gm, rpArr, raArr) : 0;
       dvTotal[k] = dvDep[k] + dvArr[k];
       if (!best || dvTotal[k] < best.dvTotal) best = { i, j, jdDep: jdDep[i], tofDays: tof[j], dvTotal: dvTotal[k], c3: c3[k] };
     }
@@ -203,7 +214,7 @@ export async function computePorkchop({
   onProgress?.(1);
   return {
     from, to, nx, ny, jdDep, tof, c3, vinfArr, dvDep, dvArr, dvTotal, best,
-    parkingAlt, arrivalAlt: alt, arrivalMode, jdStart, jdEnd, tofMin, tofMax,
+    parkingAlt, arrivalAlt: alt, arrivalMode, captureApo, jdStart, jdEnd, tofMin, tofMax,
   };
 }
 
@@ -268,7 +279,7 @@ export async function findBestWindow(opts, { onProgress, signal } = {}) {
   if (!grid?.best) return null;
   const refined = refineTransfer(grid.best, {
     from: opts.from ?? 'earth', to: opts.to, parkingAlt: opts.parkingAlt,
-    arrivalAlt: opts.arrivalAlt, arrivalMode: opts.arrivalMode,
+    arrivalAlt: opts.arrivalAlt, arrivalMode: opts.arrivalMode, captureApo: opts.captureApo ?? 0,
   });
   return { grid, transfer: refined };
 }
@@ -588,14 +599,18 @@ export async function simulateMission(plan, {
     const pole = poleVector(to, jdOf(tp));
     const orbitIncl = Math.acos(Math.max(-1, Math.min(1, vdot(vunit(hyp.hvec), pole)))) * RAD;
     if (plan.arrivalMode === 'capture') {
-      const vc = Math.sqrt(target.gm / rp);
+      const ra = captureApoapsis(to, rp, plan.captureApo ?? 0);
+      const vc = Math.sqrt((2 * target.gm * ra) / (rp * (rp + ra)));
       const vCirc = vscale(vunit(vRel), vc);
       const dv = vnorm(vRel) - vc;
+      const aCap = (rp + ra) / 2;
       capture = {
         t: tp, rp, altitude: rp - target.eqRadius, dv, vinf: vinfIn,
-        rRel, vRel: vCirc, mu: target.gm, period: (2 * Math.PI * rp) / vc, inclination: orbitIncl,
+        rRel, vRel: vCirc, mu: target.gm, period: 2 * Math.PI * Math.sqrt(aCap ** 3 / target.gm), inclination: orbitIncl,
+        ra, apoAltitude: ra - target.eqRadius, eccentricity: (ra - rp) / (ra + rp),
       };
-      events.push({ t: tp, key: 'capture', label: `捕獲點火入軌（Δv ${dv.toFixed(3)} km/s，高度 ${fmtKm(rp - target.eqRadius)}）` });
+      const shape = ra > rp * 1.01 ? `近拱點 ${fmtKm(rp - target.eqRadius)}、遠拱點 ${fmtKm(ra - target.eqRadius)}` : `高度 ${fmtKm(rp - target.eqRadius)}`;
+      events.push({ t: tp, key: 'capture', label: `捕獲點火入軌（Δv ${dv.toFixed(3)} km/s，${shape}）` });
       // 軌跡截斷於近拱點
       truncateTrajectory(traj, tp);
       status = 'captured';
@@ -794,7 +809,7 @@ export function missionStateAt(m, t) {
 export function transferFromGrid(grid, i, j) {
   return designTransfer({
     from: grid.from, to: grid.to, jdDep: grid.jdDep[i], tofDays: grid.tof[j],
-    parkingAlt: grid.parkingAlt, arrivalAlt: grid.arrivalAlt, arrivalMode: grid.arrivalMode,
+    parkingAlt: grid.parkingAlt, arrivalAlt: grid.arrivalAlt, arrivalMode: grid.arrivalMode, captureApo: grid.captureApo,
   });
 }
 

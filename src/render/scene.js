@@ -8,7 +8,7 @@ import landTopo from 'world-atlas/land-50m.json';
 
 import { AU_KM, BODIES, DAY_S, GM_EARTH_MOON, GM_SUN, J2000_JD, MOON_MASS_FRACTION, PLANET_IDS } from '../physics/constants.js';
 import { embPosition, heliocentricPosition, heliocentricState, moonGeocentricState, planetElements } from '../physics/ephemeris.js';
-import { propagateKepler, solveKepler, stateToElements } from '../physics/kepler.js';
+import { elementsToState, propagateKepler, solveKepler, stateToElements } from '../physics/kepler.js';
 import { moonGeocentric } from '../physics/moon.js';
 import { sphereOfInfluence } from '../physics/nbody.js';
 import { bodyToEclipticMatrix } from '../physics/orientation.js';
@@ -25,8 +25,8 @@ const LABEL_PRIORITY = ['spacecraft', 'sun', 'jupiter', 'saturn', 'earth', 'mars
 
 const COLORS = {
   plan: '#5ad1c8',
-  flight: '#ff9d5c',
-  flightFuture: '#b8704a',
+  flight: '#ff7ac6',
+  flightFuture: '#a3568a',
 };
 
 const ease = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
@@ -407,10 +407,12 @@ export class SolarScene {
     const to = mission.plan?.to;
     this.arrRel = to ? buildRel(to, mission.tArrPlanned - 400 * DAY_S, Infinity) : null;
     if (mission.capture) {
+      // 依真近點角均勻取樣，高離心率捕獲軌道在近拱點附近也保持平滑
       const c = mission.capture;
+      const el = stateToElements(c.rRel, c.vRel, c.mu);
       const pts = new Float64Array(361 * 3);
       for (let k = 0; k <= 360; k++) {
-        const s = propagateKepler(c.rRel, c.vRel, (c.period * k) / 360, c.mu);
+        const s = elementsToState({ ...el, nu: el.nu + (2 * Math.PI * k) / 360 }, c.mu);
         pts.set(s.r, 3 * k);
       }
       this.capturePts = pts;

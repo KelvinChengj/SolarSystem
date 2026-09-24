@@ -91,3 +91,27 @@ describe('N 體任務模擬', () => {
     expect(f.events.some((e) => e.key === 'soi-out' && e.body === 'earth')).toBe(true);
   });
 });
+
+describe('捕獲軌道形狀', () => {
+  it('橢圓捕獲比圓軌道省 Δv；遠拱點趨近無限大時等於逃逸速度差', async () => {
+    const { captureDeltaV } = await import('../src/physics/mission.js');
+    const mu = 126712764.1, rp = 71492 + 4000, vinf = 5.6;
+    const circ = captureDeltaV(vinf, mu, rp);
+    const ell = captureDeltaV(vinf, mu, rp, 8e6);
+    const inf = captureDeltaV(vinf, mu, rp, 1e15);
+    expect(ell).toBeLessThan(circ);
+    expect(inf).toBeCloseTo(Math.sqrt(vinf ** 2 + (2 * mu) / rp) - Math.sqrt((2 * mu) / rp), 6);
+    expect(captureDeltaV(vinf, mu, rp, rp)).toBeCloseTo(Math.sqrt(vinf ** 2 + (2 * mu) / rp) - Math.sqrt(mu / rp), 12);
+  });
+
+  it('木星大橢圓捕獲：N 體模擬後近拱點高度與遠拱點符合設定', async () => {
+    const range = defaultSearchRange('jupiter', JD0);
+    const best = await findBestWindow({ to: 'jupiter', ...range, parkingAlt: 200, arrivalAlt: 10000, arrivalMode: 'capture', captureApo: 0.25 });
+    expect(best.transfer.dvArr).toBeLessThan(1.5);
+    const m = await simulateMission(best.transfer);
+    expect(m.status).toBe('captured');
+    expect(Math.abs(m.capture.altitude - 10000)).toBeLessThan(50);
+    expect(m.capture.ra / sphereOfInfluence('jupiter')).toBeCloseTo(0.25, 6);
+    expect(m.capture.period / 86400).toBeGreaterThan(20);
+  });
+});

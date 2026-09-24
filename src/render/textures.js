@@ -332,9 +332,21 @@ export async function earthTextures(landGeo) {
   }
   const land = mctx.getImageData(0, 0, W, H).data;
   const { fbm } = makeNoise3(2026);
+  const { fbm: fbm2 } = makeNoise3(4242);
+  const n2 = (x, y, z) => fbm2(x, y, z, 4);
   const ocean = hexRgb('#0d2f63'), oceanDeep = hexRgb('#08204a'), shallow = hexRgb('#1d5a8e');
   const forest = hexRgb('#2e5a2a'), temperate = hexRgb('#4c7038'), desert = hexRgb('#c6a46c');
-  const tundra = hexRgb('#6d6a52'), ice = hexRgb('#eef3f6'), savanna = hexRgb('#8f8a4a');
+  const tundra = hexRgb('#6d6a52'), ice = hexRgb('#eef3f6'), savanna = hexRgb('#8f8a4a'), steppe = hexRgb('#a39a62');
+  // 緯度色階（度）：熱帶雨林 → 莽原 → 副熱帶沙漠 → 草原 → 溫帶 → 寒帶針葉林 → 凍原
+  const stops = [[0, forest], [9, forest], [17, savanna], [24, desert], [31, steppe], [40, temperate], [52, forest], [62, tundra], [90, tundra]];
+  const latStops = (a) => {
+    const t = Math.max(0, Math.min(89.9, a));
+    for (let k = 0; k < stops.length - 1; k++) {
+      const [a0, c0] = stops[k], [a1, c1] = stops[k + 1];
+      if (t <= a1) return mix(c0, c1, smooth(a0, a1, t));
+    }
+    return tundra;
+  };
 
   // 以模糊後的遮罩近似淺海
   const blurCanvas = document.createElement('canvas');
@@ -356,16 +368,15 @@ export async function earthTextures(landGeo) {
       const seaIce = latD > 78 || latD < -68 ? smooth(0.1, 0.3, n + (Math.abs(latD) - 72) / 20) : 0;
       return mix(c, ice, seaIce * 0.9);
     }
-    const a = Math.abs(latD);
-    const arid = smooth(0.0, 0.25, n + 0.15 - Math.abs(a - 24) / 22);
-    let c;
-    if (a < 12) c = mix(forest, savanna, clamp01(arid * 0.8));
-    else if (a < 40) c = mix(mix(savanna, temperate, clamp01((a - 30) / 10)), desert, arid);
-    else if (a < 58) c = mix(temperate, forest, clamp01(n + 0.5));
-    else c = mix(tundra, forest, clamp01((62 - a) / 8));
-    c = shade(c, 1 + n * 0.25);
+    // 以雜訊擾動緯度，再用平滑色階決定生物群系，避免出現筆直的緯度分界
+    const a = Math.abs(latD) + n2(x * 2.2, y * 2.2, z * 2.2) * 9;
+    let c = latStops(a);
+    // 區域乾濕變化：副熱帶偏乾、赤道與溫帶偏濕
+    const dry = clamp01(0.5 + n2(x * 1.3 + 5, y * 1.3, z * 1.3) * 1.4) * (0.35 + 0.65 * Math.exp(-((a - 26) ** 2) / 90));
+    c = mix(c, desert, clamp01(dry - 0.15));
+    c = shade(c, 1 + n * 0.22);
     const greenland = lon / DEG > -75 && lon / DEG < -10 && latD > 60;
-    const snow = latD < -60 || greenland ? 1 : smooth(66, 74, a + n * 8);
+    const snow = latD < -60 || greenland ? 1 : smooth(64, 74, a + n * 6);
     return mix(c, ice, snow);
   });
 
