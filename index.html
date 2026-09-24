@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>太陽系航道模擬器</title>
+  <meta name="description" content="3D 太陽系模擬：真實日期星曆、Lambert 轉移軌道、N 體重力積分、Porkchop 發射窗口圖與飛行時間計算" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+TC:wght@400;500;700&family=Noto+Serif+TC:wght@600&display=swap" />
+</head>
+<body>
+  <div id="app">
+    <div id="stage" aria-label="3D 太陽系視圖"></div>
+
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand__name">太陽系航道模擬器</span>
+        <span class="brand__sub">星曆 · 轉移軌道 · N 體重力</span>
+      </div>
+      <div class="clock" aria-live="off">
+        <div class="clock__main"><span id="clock-date">----</span><span id="clock-time">--:--:--</span><span class="clock__utc">UTC</span></div>
+        <div class="clock__sub"><span id="clock-jd">JD —</span><span id="clock-dt" class="hide-narrow">TT−UTC —</span></div>
+      </div>
+      <div class="timectl" role="group" aria-label="時間控制">
+        <button class="iconbtn" id="btn-reverse" type="button" title="反向播放" aria-pressed="false">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 6 3 12l8 6V6Zm10 0-8 6 8 6V6Z" /></svg>
+        </button>
+        <button class="iconbtn iconbtn--primary" id="btn-play" type="button" title="播放 / 暫停">
+          <svg class="ico-pause" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 5h4v14H7zM13 5h4v14h-4z" /></svg>
+          <svg class="ico-play" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z" /></svg>
+        </button>
+        <label class="rate">
+          <span class="visually-hidden">時間速率</span>
+          <select id="rate-select"></select>
+        </label>
+        <button class="btn btn--ghost hide-narrow" id="btn-now" type="button" title="回到目前真實時間">現在</button>
+        <label class="datejump hide-narrow" title="跳至指定日期（UTC）">
+          <span class="visually-hidden">跳至日期</span>
+          <input type="datetime-local" id="jump-input" step="60" />
+        </label>
+      </div>
+    </header>
+
+    <aside class="panel panel--left" id="panel-bodies" data-sheet="bodies">
+      <section class="block">
+        <h2 class="block__title">天體</h2>
+        <ul class="bodylist" id="body-list"></ul>
+      </section>
+      <section class="block">
+        <h2 class="block__title">顯示</h2>
+        <div class="toggles">
+          <label class="check"><input type="checkbox" id="opt-orbits" checked /> 軌道線</label>
+          <label class="check"><input type="checkbox" id="opt-labels" checked /> 名稱標籤</label>
+          <label class="check"><input type="checkbox" id="opt-grid" checked /> 黃道格線</label>
+          <label class="check"><input type="checkbox" id="opt-soi" /> 影響球 (SOI)</label>
+          <label class="check"><input type="checkbox" id="opt-velocity" /> 速度向量</label>
+          <label class="check"><input type="checkbox" id="opt-autoslow" checked /> 事件前自動減速</label>
+        </div>
+        <label class="field field--inline">
+          <span>天體最小尺寸</span>
+          <input type="range" id="opt-minpx" min="2" max="14" step="1" value="4" />
+          <output id="opt-minpx-out" class="mono">4 px</output>
+        </label>
+        <label class="field field--inline">
+          <span>軌跡參考系</span>
+          <select id="opt-frame">
+            <option value="auto">自動（近行星時以行星為中心）</option>
+            <option value="helio">固定日心</option>
+          </select>
+        </label>
+      </section>
+      <section class="block" id="info-block">
+        <h2 class="block__title" id="info-title">天體資訊</h2>
+        <dl class="kv" id="info-list"></dl>
+      </section>
+    </aside>
+
+    <aside class="panel panel--right" id="panel-mission" data-sheet="mission">
+      <div class="tabs" role="tablist">
+        <button class="tab is-active" role="tab" aria-selected="true" data-tab="plan" type="button">任務規劃</button>
+        <button class="tab" role="tab" aria-selected="false" data-tab="free" type="button">自由飛行實驗</button>
+      </div>
+
+      <div class="tabpanel" data-panel="plan">
+        <section class="block">
+          <div class="grid2">
+            <label class="field">
+              <span>目的地</span>
+              <select id="m-target"></select>
+            </label>
+            <div class="field">
+              <span>抵達方式</span>
+              <div class="seg" role="radiogroup" aria-label="抵達方式">
+                <button type="button" class="seg__btn is-on" data-mode="capture" role="radio" aria-checked="true">入軌捕獲</button>
+                <button type="button" class="seg__btn" data-mode="flyby" role="radio" aria-checked="false">飛掠</button>
+              </div>
+            </div>
+            <label class="field">
+              <span>出發日期 (UTC)</span>
+              <input type="date" id="m-dep" />
+            </label>
+            <label class="field">
+              <span>飛行時間（天）</span>
+              <input type="number" id="m-tof" min="5" max="30000" step="1" />
+            </label>
+            <label class="field">
+              <span>停泊軌道高度 (km)</span>
+              <input type="number" id="m-park" min="160" max="2000" step="10" value="200" />
+            </label>
+            <label class="field">
+              <span>目標近拱點高度 (km)</span>
+              <input type="number" id="m-arrive-alt" min="50" max="5000000" step="50" />
+            </label>
+            <label class="field field--wide">
+              <span>發射場</span>
+              <select id="m-site"></select>
+            </label>
+          </div>
+          <input type="range" id="m-tof-range" min="30" max="600" step="1" aria-label="飛行時間滑桿" />
+          <div class="btnrow">
+            <button class="btn" id="btn-best" type="button">搜尋最佳窗口</button>
+            <button class="btn" id="btn-pork" type="button">發射窗口圖</button>
+          </div>
+          <p class="hint" id="m-status">以 Lambert 問題求解兩個日期之間的轉移軌道。</p>
+        </section>
+
+        <section class="block">
+          <h2 class="block__title">轉移軌道（圓錐曲線拼接）</h2>
+          <div class="summary" id="transfer-summary"></div>
+          <dl class="kv kv--dense" id="transfer-list"></dl>
+          <details class="more">
+            <summary>理想 Hohmann 轉移比較</summary>
+            <dl class="kv kv--dense" id="hohmann-list"></dl>
+          </details>
+          <button class="btn btn--launch" id="btn-launch" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2c3 2.5 4.5 6 4.5 9.5 0 1.3-.2 2.5-.6 3.6l2.1 2.4-2.8 1.2-1.2-2.2h-4l-1.2 2.2-2.8-1.2 2.1-2.4c-.4-1.1-.6-2.3-.6-3.6C7.5 8 9 4.5 12 2Zm0 6.2a1.8 1.8 0 1 0 0 3.6 1.8 1.8 0 0 0 0-3.6ZM10 20h4l-2 2.5z" /></svg>
+            <span>發射並以 N 體重力模擬</span>
+          </button>
+          <div class="progress" id="launch-progress" hidden><div class="progress__bar"></div><span class="progress__text"></span></div>
+        </section>
+
+        <section class="block" id="mission-block" hidden>
+          <h2 class="block__title">任務結果（N 體積分）</h2>
+          <div class="status-chip" id="mission-status"></div>
+          <dl class="kv kv--dense" id="mission-list"></dl>
+          <h3 class="block__sub">任務時間軸</h3>
+          <ol class="timeline" id="mission-timeline"></ol>
+          <div class="btnrow">
+            <button class="btn btn--ghost" id="btn-goto-launch" type="button">跳至發射</button>
+            <button class="btn btn--ghost" id="btn-goto-arrive" type="button">跳至抵達</button>
+            <button class="btn btn--ghost" id="btn-follow" type="button">跟隨太空船</button>
+          </div>
+        </section>
+      </div>
+
+      <div class="tabpanel" data-panel="free" hidden>
+        <section class="block">
+          <p class="hint">從地球 200 km 停泊軌道出發，指定雙曲線超速 v∞ 與方向，直接以 N 體重力積分，觀察重力助推與軌道變化。出發時刻為目前模擬時間。</p>
+          <div class="presets" id="free-presets"></div>
+          <label class="field field--inline">
+            <span>v∞（km/s）</span>
+            <input type="range" id="f-vinf" min="0" max="20" step="0.05" value="2.95" />
+            <output id="f-vinf-out" class="mono">2.95</output>
+          </label>
+          <label class="field field--inline">
+            <span>方位角（°，0 = 地球公轉方向）</span>
+            <input type="range" id="f-az" min="-180" max="180" step="1" value="0" />
+            <output id="f-az-out" class="mono">0°</output>
+          </label>
+          <label class="field field--inline">
+            <span>仰角（°，離開黃道面）</span>
+            <input type="range" id="f-el" min="-90" max="90" step="1" value="0" />
+            <output id="f-el-out" class="mono">0°</output>
+          </label>
+          <label class="field field--inline">
+            <span>模擬天數</span>
+            <input type="number" id="f-days" min="10" max="20000" step="10" value="600" />
+          </label>
+          <dl class="kv kv--dense" id="free-preview"></dl>
+          <button class="btn btn--launch" id="btn-free" type="button"><span>發射自由飛行</span></button>
+        </section>
+        <section class="block" id="free-result" hidden>
+          <h2 class="block__title">飛行結果</h2>
+          <dl class="kv kv--dense" id="free-list"></dl>
+          <ol class="timeline" id="free-timeline"></ol>
+        </section>
+      </div>
+    </aside>
+
+    <section class="telemetry" id="telemetry" data-sheet="telemetry" hidden>
+      <div class="telemetry__head">
+        <span class="telemetry__met mono" id="t-met">T+ —</span>
+        <span class="phase-chip" id="t-phase">—</span>
+        <span class="telemetry__next" id="t-next"></span>
+      </div>
+      <div class="telemetry__grid" id="t-grid"></div>
+      <div class="gravity">
+        <div class="gravity__title">重力加速度（對數刻度）<span id="t-dominant"></span></div>
+        <div class="gravity__bars" id="t-gravity"></div>
+      </div>
+    </section>
+
+    <section class="porkchop" id="porkchop" hidden aria-labelledby="pc-title">
+      <header class="porkchop__head">
+        <h2 id="pc-title">發射窗口圖</h2>
+        <div class="seg seg--small" role="radiogroup" aria-label="顯示量">
+          <button type="button" class="seg__btn is-on" data-metric="dvTotal" role="radio" aria-checked="true">總 Δv</button>
+          <button type="button" class="seg__btn" data-metric="c3" role="radio" aria-checked="false">C3</button>
+          <button type="button" class="seg__btn" data-metric="vinfArr" role="radio" aria-checked="false">抵達 v∞</button>
+        </div>
+        <button class="iconbtn" id="pc-close" type="button" title="關閉">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" stroke="currentColor" stroke-width="2" fill="none" /></svg>
+        </button>
+      </header>
+      <div class="porkchop__range">
+        <label>出發起 <input type="date" id="pc-start" /></label>
+        <label>出發迄 <input type="date" id="pc-end" /></label>
+        <label>飛行 <input type="number" id="pc-tofmin" min="5" step="5" /> – <input type="number" id="pc-tofmax" min="10" step="5" /> 天</label>
+        <button class="btn btn--small" id="pc-recalc" type="button">重新計算</button>
+      </div>
+      <div class="porkchop__body">
+        <div class="porkchop__chart">
+          <canvas id="pc-canvas"></canvas>
+          <div class="pc-tooltip" id="pc-tooltip" hidden></div>
+          <div class="progress progress--overlay" id="pc-progress" hidden><div class="progress__bar"></div><span class="progress__text">計算中…</span></div>
+        </div>
+        <div class="porkchop__side">
+          <div class="scale" id="pc-scale"></div>
+          <h3 class="block__sub">最佳方案</h3>
+          <table class="besttable" id="pc-best"><thead><tr><th>出發</th><th>飛行</th><th>C3</th><th>總 Δv</th></tr></thead><tbody></tbody></table>
+        </div>
+      </div>
+      <p class="hint">每一格為一次 Lambert 求解；點選任一格即設定該出發日與飛行時間。總 Δv = 自 LEO 逃逸點火 + 目標處捕獲點火。</p>
+    </section>
+
+    <nav class="tabbar" aria-label="面板">
+      <button type="button" data-open="bodies">天體</button>
+      <button type="button" data-open="mission" class="is-on">任務</button>
+      <button type="button" data-open="porkchop">窗口圖</button>
+      <button type="button" data-open="telemetry">遙測</button>
+      <button type="button" data-open="none">全畫面</button>
+    </nav>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <div class="loading" id="loading"><div class="loading__ring"></div><span id="loading-text">正在建立太陽系…</span></div>
+  </div>
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>

@@ -734,20 +734,35 @@ function analyzeFlyby(traj, cache, id, tp, info) {
 
 /** 任務中任意時刻的太空船日心狀態（km, km/s）與飛行階段。 */
 export function missionStateAt(m, t) {
-  if (t < m.tLiftoff) return null;
   const earth = [0, 0, 0], earthV = [0, 0, 0];
   const g = m.geom;
+  if (t < m.tLiftoff) {
+    // 升空前一天起，火箭停在發射台上隨地球自轉
+    if (!m.launch || t < m.tLiftoff - DAY_S) return null;
+    m.cache.position('earth', t, earth, earthV);
+    const jd = jdOf(t);
+    const rel = mvec(bodyToEclipticMatrix('earth', jd), [
+      Math.cos(m.site.lat * DEG) * Math.cos(m.site.lon * DEG) * BODIES.earth.eqRadius,
+      Math.cos(m.site.lat * DEG) * Math.sin(m.site.lon * DEG) * BODIES.earth.eqRadius,
+      Math.sin(m.site.lat * DEG) * BODIES.earth.eqRadius,
+    ]);
+    const k = poleVector('earth', jd);
+    const omega = (2 * Math.PI) / 86164.0905;
+    const vrot = vscale(vcross(k, rel), omega);
+    return { r: vadd(earth, rel), v: vadd(earthV, vrot), phase: 'prelaunch', central: 'earth', rel, dir: vunit(rel) };
+  }
   if (t < m.tTMI) {
     m.cache.position('earth', t, earth, earthV);
     if (t < m.tInjection && m.launch) {
-      // 簡化上升段：在軌道面內由發射場升至停泊軌道
+      // 簡化上升段：在軌道面內由發射場升至停泊軌道（重力轉彎：由垂直逐漸轉為水平）
       const s = (t - m.tLiftoff) / (m.tInjection - m.tLiftoff);
       const theta = m.launch.thetaSite + (m.launch.thetaInj - m.launch.thetaSite) * s * s;
       const R = BODIES.earth.eqRadius + m.plan.parkingAlt * (1 - (1 - s) * (1 - s));
       const dir = vadd(vscale(g.phat, Math.cos(theta)), vscale(g.qhat, Math.sin(theta)));
+      const tang = vadd(vscale(g.phat, -Math.sin(theta)), vscale(g.qhat, Math.cos(theta)));
       const r = vadd(earth, vscale(dir, R));
-      const v = vadd(earthV, vscale(vadd(vscale(g.phat, -Math.sin(theta)), vscale(g.qhat, Math.cos(theta))), g.vc * s));
-      return { r, v, phase: 'ascent', central: 'earth', rel: vscale(dir, R) };
+      const v = vadd(earthV, vscale(tang, g.vc * s));
+      return { r, v, phase: 'ascent', central: 'earth', rel: vscale(dir, R), dir: vunit(vadd(vscale(dir, 1 - s), vscale(tang, s + 0.05))) };
     }
     // 停泊軌道滑行（圓軌道），於 tTMI 抵達近拱點方向 p̂
     const th = g.n * (t - m.tTMI);
